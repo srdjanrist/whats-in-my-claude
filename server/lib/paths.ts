@@ -39,7 +39,18 @@ export function tildify(p: string): string {
   return p === home || p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p
 }
 
-/** Where whats-in-my-claude keeps its own cache: never inside ~/.claude. */
+/**
+ * Where whats-in-my-claude keeps its transcript index: the OS cache folder
+ * (never inside ~/.claude, and not inside the installed package).
+ */
 export function appCacheDir(): string {
-  return process.env.WIMC_CACHE_DIR || path.resolve(import.meta.dirname, '../../.cache')
+  if (process.env.WIMC_CACHE_DIR) return process.env.WIMC_CACHE_DIR
+  const home = os.homedir()
+  const base =
+    process.platform === 'darwin'
+      ? path.join(home, 'Library', 'Caches')
+      : process.platform === 'win32'
+        ? process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local')
+        : process.env.XDG_CACHE_HOME || path.join(home, '.cache')
+  return path.join(base, 'whats-in-my-claude')
 }
