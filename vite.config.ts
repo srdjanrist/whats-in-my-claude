@@ -11,6 +11,7 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
+  build: { outDir: 'dist/client', emptyOutDir: true },
   server: {
     host: '127.0.0.1',
     port: 5173,
