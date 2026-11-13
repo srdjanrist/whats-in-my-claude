@@ -22,28 +22,47 @@ A local, read-only dashboard of your Claude Code setup: everything Claude Code k
 ## Run it
 
 ```sh
-bun install
-bun run dev      # API on 127.0.0.1:4317 + Vite on http://127.0.0.1:5173
+npx whats-in-my-claude
 ```
 
-To run a single process (build once, then API and web on one port):
+It starts on http://127.0.0.1:4317 (or the next free port) and opens your browser. Needs Node 22 or newer; nothing else is installed.
+
+```
+Options:
+  -p, --port <n>  Port to listen on (default 4317, or the next free one)
+      --no-open   Don't open the browser
+  -h, --help      Show this help
+  -v, --version   Show the version
+```
+
+| Variable            | Default            |                                              |
+| ------------------- | ------------------ | -------------------------------------------- |
+| `CLAUDE_CONFIG_DIR` | `~/.claude`        | Same meaning as in Claude Code               |
+| `WIMC_PORT`         | `4317`             | Port (same as `--port`)                      |
+| `WIMC_CACHE_DIR`    | your cache folder¹ | Where the transcript index is cached         |
+| `WIMC_HOME`         | your home dir      | Read a different home folder (used by tests) |
+
+¹ `~/Library/Caches/whats-in-my-claude` on macOS, `$XDG_CACHE_HOME/whats-in-my-claude` (default `~/.cache/…`) on Linux, `%LOCALAPPDATA%\whats-in-my-claude` on Windows.
+
+## Develop
+
+Uses [Bun](https://bun.sh) for scripts.
 
 ```sh
-bun run start    # http://127.0.0.1:4317
+bun install
+bun run dev      # API on 127.0.0.1:4317 + Vite on http://127.0.0.1:5173
+bun run start    # build, then run the CLI exactly as npx would
 ```
 
-| Variable            | Default       |                                              |
-| ------------------- | ------------- | -------------------------------------------- |
-| `CLAUDE_CONFIG_DIR` | `~/.claude`   | Same meaning as in Claude Code               |
-| `WIMC_PORT`         | `4317`        | API port                                     |
-| `WIMC_CACHE_DIR`    | `./.cache`    | Where the transcript index is cached         |
-| `WIMC_HOME`         | your home dir | Read a different home folder (used by tests) |
+The server is [Hono](https://hono.dev) on `@hono/node-server`, so it runs on both Node and Bun. `bun run build` puts the web app in `dist/client` and bundles the server and all its dependencies into one readable file, `dist/cli.js`, so the published package has no dependencies.
+
+To release: `npm version patch` (or `minor`), then `npm publish`. `prepublishOnly` runs typecheck, lint, tests and the build first.
 
 ## Privacy and safety
 
 What's in my Claude runs on your machine, reads files, and shows them to you. It does nothing else.
 
-- **Read-only.** The server never writes to `~/.claude`, `~/.claude.json` or your projects. Its only write is its own transcript index in `whats-in-my-claude/.cache`.
+- **Read-only.** The server never writes to `~/.claude`, `~/.claude.json` or your projects. Its only write is its own transcript index in your cache folder (see `WIMC_CACHE_DIR`).
 - **Local only.** The server binds to `127.0.0.1`. It rejects requests whose `Host` or `Origin` isn't localhost (this blocks DNS-rebinding pages), serves `GET` only, and sends no CORS headers.
 - **Secrets stay on the server.**
   - **`~/.claude.json`:** read through an allow-list. Account data (`oauthAccount`, email, user/machine ids), caches and `lastSessionFirstPrompt` are never read out.
