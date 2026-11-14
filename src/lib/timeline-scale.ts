@@ -18,6 +18,8 @@ export interface Tick {
   at: number
   x: number
   label: string
+  /** How the label sits on its tick: labels at the edges hang inward. */
+  align: 'start' | 'center' | 'end'
 }
 
 export interface Scale {
@@ -129,18 +131,20 @@ export function buildScale(spans: Span[], options: ScaleOptions = {}): Scale {
 
   const multiDay = dayOf(first.from) !== dayOf(last.to)
   const ticks: Tick[] = []
-  let lastX = Number.NEGATIVE_INFINITY
-  let lastLength = 0
+  let lastEnd = Number.NEGATIVE_INFINITY
   let lastDay = ''
   const add = (at: number) => {
     const px = xOf(at)
     const day = dayOf(at)
     const text = label(at, multiDay && day !== lastDay)
-    // Labels need room: about 1.3 % per character on a ~550 px track (the narrowest it gets).
-    if (px - lastX < Math.max(6, lastLength * 1.3)) return false
-    ticks.push({ at, x: px, label: text })
-    lastX = px
-    lastLength = text.length
+    // Where the label's text actually runs, at about 1.3 % per character on a
+    // ~550 px track (the narrowest it gets); it must clear the previous one.
+    const width = text.length * 1.3
+    const align: Tick['align'] = px < 2 ? 'start' : px > 92 ? 'end' : 'center'
+    const start = align === 'start' ? px : align === 'end' ? px - width : px - width / 2
+    if (start < lastEnd + 1.5) return false
+    ticks.push({ at, x: px, label: text, align })
+    lastEnd = start + width
     lastDay = day
     return true
   }
