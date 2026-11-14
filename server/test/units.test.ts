@@ -12,8 +12,19 @@ import {
   redactSettings,
   redactUrl,
 } from '../lib/redact.ts'
+import { buildSessionMap, type MapAgentInput } from '../lib/session-map.ts'
 import { commandName, isHumanPrompt } from '../lib/transcript/prompts.ts'
 import { parseRecord, type UserRecord } from '../lib/transcript/records.ts'
+import { emptyStats } from '../lib/transcript/stats.ts'
+import type { AgentMeta } from '../lib/transcript/subagents.ts'
+import {
+  emptyTimeline,
+  type FileEvent,
+  type FileKind,
+  mergeTimes,
+  parseFileHistory,
+  type Timeline,
+} from '../lib/transcript/timeline.ts'
 import { hookScripts } from '../lib/warnings.ts'
 
 describe('redaction', () => {
@@ -134,5 +145,174 @@ describe('project map', () => {
     expect(commandName('<command-name>/review</command-name>\n<command-args>12</command-args>')).toBe('/review')
     expect(commandName('<command-name>ns:do</command-name>')).toBe('/ns:do')
     expect(commandName('just text')).toBeNull()
+  })
+})
+
+describe('session map', () => {
+  it('reads file-history snapshots and deltas, and nothing else', () => {
+    const snapshot = parseFileHistory({
+      type: 'file-history-snapshot',
+      snapshot: {
+        timestamp: '2026-11-01T10:05:00.000Z',
+        trackedFileBackups: {
+          'src/a.ts': {
+            backupFileName: 'abc@v2',
+            version: 2,
+            backupTime: '2026-11-01T10:04:00.000Z',
+            realParentDir: '/p/src',
+          },
+          'new.md': { backupFileName: null, version: 1, backupTime: '2026-11-01T10:03:00.000Z' },
+          'broken.md': { backupFileName: 'x@v1' },
+        },
+      },
+    })
+    expect(snapshot).toEqual([
+      { path: 'src/a.ts', realParentDir: '/p/src', version: 2, at: Date.UTC(2026, 10, 1, 10, 4), exists: true },
+      { path: 'new.md', realParentDir: null, version: 1, at: Date.UTC(2026, 10, 1, 10, 3), exists: false },
+    ])
+    expect(
+      parseFileHistory({
+        type: 'file-history-delta',
+        trackingPath: '/abs/b.ts',
+        backup: { backupFileName: 'b@v1', version: 1 },
+        timestamp: '2026-11-01T10:06:00.000Z',
+      }),
+    ).toEqual([{ path: '/abs/b.ts', realParentDir: null, version: 1, at: Date.UTC(2026, 10, 1, 10, 6), exists: true }])
+    expect(parseFileHistory({ type: 'file-history-snapshot' })).toEqual([])
+    expect(parseFileHistory({ type: 'user', snapshot: {} })).toEqual([])
+  })
+
+  it('splits activity at long gaps', () => {
+    const min = 60_000
+    expect(mergeTimes([30 * min, 0, 5 * min])).toEqual([
+      { from: 0, to: 5 * min },
+      { from: 30 * min, to: 30 * min },
+    ])
+    expect(mergeTimes([])).toEqual([])
+  })
+
+  const tl = (p: Partial<Timeline>): Timeline => ({ ...emptyTimeline(), ...p })
+  const ev = (id: string, at: number, kind: FileKind, file: string, failed = false): FileEvent => ({
+    id,
+    at,
+    tool: kind === 'read' ? 'Read' : kind === 'edit' ? 'Edit' : 'Write',
+    kind,
+    path: file,
+    failed,
+  })
+  const agent = (
+    agentId: string,
+    meta: Partial<AgentMeta>,
+    timeline: Partial<Timeline>,
+    toolCalls: Record<string, number> = {},
+  ): MapAgentInput => ({
+    agentId,
+    meta: {
+      agentType: null,
+      description: null,
+      toolUseId: null,
+      spawnDepth: null,
+      model: null,
+      isFork: false,
+      finished: null,
+      ...meta,
+    },
+    timeline: tl(timeline),
+    stats: { ...emptyStats(), toolCalls },
+    bytes: 0,
+    mtimeMs: 0,
+  })
+  const call = (id: string, at: number, type: string) => ({ id, at, type, description: null })
+
+  const map = buildSessionMap({
+    cwd: '/p',
+    home: '/h',
+    now: Date.now(),
+    main: {
+      timeline: tl({
+        firstAt: 100,
+        lastAt: 1200,
+        prompts: [
+          { at: 100, text: 'go' },
+          { at: 1000, text: 'more' },
+        ],
+        agentCalls: [call('L1', 200, 'general-purpose'), call('LF', 1100, 'fork')],
+        fileEvents: [ev('m1', 150, 'read', '/p/src/a.ts'), ev('m2', 160, 'edit', '/p/src/a.ts', true)],
+        backups: [
+          { path: 'src/a.ts', realParentDir: '/p/src', version: 1, at: 155, exists: true },
+          // Relative to a folder whose real path differs: found through realParentDir.
+          { path: 'b.ts', realParentDir: '/real/p', version: 1, at: 300, exists: false },
+        ],
+      }),
+      stats: emptyStats(),
+    },
+    agents: [
+      agent('U', { agentType: 'Explore', toolUseId: 'nope' }, { firstAt: 500 }),
+      agent(
+        'F',
+        { isFork: true, toolUseId: 'LF' },
+        {
+          firstAt: 1100,
+          // A fork's transcript starts with a copy of its parent's last message.
+          agentCalls: [call('LF', 1100, 'fork')],
+          fileEvents: [ev('m1', 150, 'read', '/p/src/a.ts')],
+        },
+        { Agent: 1, Read: 2 },
+      ),
+      agent(
+        'B',
+        { agentType: 'Explore', toolUseId: 'L2' },
+        {
+          firstAt: 320,
+          fileEvents: [ev('b1', 320, 'read', '/h/notes/x.md')],
+        },
+      ),
+      agent(
+        'A',
+        { agentType: 'general-purpose', toolUseId: 'L1' },
+        {
+          firstAt: 210,
+          agentCalls: [call('L2', 300, 'Explore')],
+          fileEvents: [ev('a1', 310, 'write', '/real/p/b.ts')],
+        },
+      ),
+      // Each claims to be launched by the other.
+      agent('C1', { toolUseId: 'K2' }, { firstAt: 600, agentCalls: [call('K1', 610, 'Explore')] }),
+      agent('C2', { toolUseId: 'K1' }, { firstAt: 640, agentCalls: [call('K2', 650, 'Explore')] }),
+    ],
+    stored: [],
+    linked: { continuedIn: null, continuedFrom: [], continuedFromPartial: false, plans: [] },
+  })
+  const byId = (id: string) => map.agents.find(a => a.id === id)
+
+  it('finds who launched each agent, in tree order', () => {
+    expect(map.agents.map(a => `${a.id}:${a.depth}`)).toEqual(['A:1', 'B:2', 'U:1', 'C1:1', 'C2:2', 'F:1'])
+    expect(byId('A')).toMatchObject({ parent: 'main', parentKnown: true, afterPrompt: 1, children: ['B'] })
+    expect(byId('B')).toMatchObject({ parent: 'A', parentKnown: true, afterPrompt: null, launchedAt: 300 })
+    expect(byId('U')).toMatchObject({ parent: 'main', parentKnown: false, launchedAt: 500 })
+    expect(byId('C1')).toMatchObject({ parent: 'main', parentKnown: false })
+    expect(byId('C2')).toMatchObject({ parent: 'C1', parentKnown: true })
+  })
+
+  it("credits a fork's copied launch to its parent", () => {
+    expect(byId('F')).toMatchObject({ parent: 'main', parentKnown: true, isFork: true, type: 'fork', afterPrompt: 2 })
+    expect(byId('F')?.toolCalls).toEqual({ Read: 2 })
+    expect(map.launches.find(l => l.id === 'LF')).toMatchObject({ by: 'main', agentId: 'F' })
+    expect(map.launches.find(l => l.id === 'L2')).toMatchObject({ by: 'A', agentId: 'B' })
+    expect(map.summary.unmatchedLaunches).toBe(0)
+  })
+
+  it('groups file events by path, with versions and display paths', () => {
+    const file = (id: string) => map.files.find(f => f.id === id)
+    // The fork's copy of m1 is dropped; the failed edit isn't counted.
+    expect(file('src/a.ts')).toMatchObject({ inCwd: true, dir: 'src/', name: 'a.ts', reads: 1, edits: 0 })
+    expect(file('src/a.ts')?.events.map(e => `${e.who}:${e.kind}:${e.failed}`)).toEqual([
+      'main:read:false',
+      'main:edit:true',
+    ])
+    expect(file('src/a.ts')?.versions).toEqual([{ version: 1, at: 155, exists: true }])
+    expect(file('/real/p/b.ts')).toMatchObject({ inCwd: false, created: true, edits: 1 })
+    expect(file('~/notes/x.md')?.events.map(e => e.who)).toEqual(['B'])
+    expect(map.summary).toMatchObject({ filesRead: 2, filesEdited: 1, filesCreated: 1, nested: 2, forks: 1 })
   })
 })

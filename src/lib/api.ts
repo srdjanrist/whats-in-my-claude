@@ -63,6 +63,11 @@ export const q = {
       queryKey: ['session', id],
       queryFn: () => ok(api.sessions[':id'].$get({ param: { id } })),
     }),
+  sessionMap: (id: string) =>
+    queryOptions({
+      queryKey: ['session-map', id],
+      queryFn: () => ok(api.sessions[':id'].map.$get({ param: { id } })),
+    }),
   conversation: (id: string, agent: string | undefined, offset: number, limit: number) =>
     queryOptions({
       queryKey: ['conversation', id, agent ?? '', offset, limit],

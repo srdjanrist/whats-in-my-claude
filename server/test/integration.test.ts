@@ -56,7 +56,7 @@ describe('transcripts', () => {
     expect(s.models['<synthetic>']).toBeUndefined()
     expect(s.apiErrors).toBe(1)
     expect(s.humanPrompts).toBe(2)
-    expect(s.toolCalls).toEqual({ Bash: 1 })
+    expect(s.toolCalls).toEqual({ Bash: 1, Agent: 1, Read: 1, Edit: 1, Write: 1 })
     expect(s.skippedLines).toBe(2)
     expect(s.workMs).toBe(60_000)
     expect(s.cost?.costUSD).toBe(0.5)
@@ -142,6 +142,7 @@ describe('api', () => {
       ...projects.projects.map(p => `/api/projects/${encodeURIComponent(p.id)}/graph`),
       '/api/sessions',
       `/api/sessions/${sessionId}`,
+      `/api/sessions/${sessionId}/map`,
       `/api/sessions/${sessionId}/conversation?offset=0&limit=200`,
       `/api/sessions/${sessionId}/conversation?agent=${agentId}`,
       ...Array.from({ length: 8 }, (_, i) => `/api/sessions/${sessionId}/entry/${i}`),
@@ -225,7 +226,7 @@ describe('api', () => {
     expect(item('mcp', 'Gmail')).toMatchObject({ origin: 'claude-ai', uses: 0 })
     // Used, not in the setup.
     expect(item('mcp', 'gone')).toMatchObject({ origin: 'missing', uses: 1 })
-    expect(item('agent', 'Explore')).toMatchObject({ origin: 'builtin', uses: 1 })
+    expect(item('agent', 'Explore')).toMatchObject({ origin: 'builtin', uses: 2 })
     // ~/.agents/skills only counts through its link in ~/.claude/skills.
     expect(map.items.filter(i => i.label === 'shared').map(i => i.origin)).toEqual(['user'])
     // Hooks can't be counted, and only their event and matcher are shown.
@@ -247,6 +248,73 @@ describe('api', () => {
       'prompt',
       'assistant',
     ])
-    expect(page.entries[1]?.blocks?.map(b => b.type)).toEqual(['text', 'tool_use'])
+    expect(page.entries[1]?.blocks?.map(b => b.type)).toEqual(['text', 'tool_use', 'tool_use'])
+  })
+
+  it('maps a session: who launched which agent, and who touched which file', async () => {
+    expect((await get('/api/sessions/nope/map')).status).toBe(404)
+    const res = await get(`/api/sessions/${fx.sessionId}/map`)
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    // Tool inputs, agent prompts, backups and tool results never leave the server.
+    expect(body).not.toContain('MAP-PRIVATE')
+    expect(body).not.toContain(LEAK)
+    const map = JSON.parse(body) as {
+      main: { prompts: { n: number; text: string }[] }
+      agents: {
+        id: string
+        type: string
+        parent: string
+        parentKnown: boolean
+        depth: number
+        afterPrompt: number | null
+        launchedAt: number | null
+      }[]
+      files: {
+        id: string
+        inCwd: boolean
+        events: { who: string; kind: string }[]
+        versions: { version: number; exists: boolean }[]
+        created: boolean
+      }[]
+      stored: { key: string; files: number }[]
+      linked: { plans: { slug: string }[] }
+      summary: { agents: number; unmatchedLaunches: number; filesEdited: number; filesCreated: number }
+    }
+    expect(map.main.prompts.map(p => p.text)).toEqual(['build the thing', 'now test it'])
+    expect(map.agents).toEqual([
+      expect.objectContaining({
+        id: fx.agentId,
+        type: 'Explore',
+        parent: 'main',
+        parentKnown: true,
+        depth: 1,
+        afterPrompt: 1,
+        launchedAt: Date.UTC(2026, 10, 1, 10, 1),
+      }),
+    ])
+    // The subagent's own two Agent calls have no transcript on disk.
+    expect(map.summary.unmatchedLaunches).toBe(2)
+
+    const appFile = map.files.find(f => f.id === 'src/app.ts')
+    expect(appFile?.inCwd).toBe(true)
+    // By time: the subagent read it (10:02) before main read and edited it (10:03).
+    expect(appFile?.events.map(e => `${e.who}:${e.kind}`)).toEqual([`${fx.agentId}:read`, 'main:read', 'main:edit'])
+    expect(appFile?.versions).toEqual([expect.objectContaining({ version: 1, exists: true })])
+    const notes = map.files.find(f => f.id === 'notes.md')
+    expect(notes?.created).toBe(true)
+    expect(notes?.events.map(e => e.kind)).toEqual(['write'])
+    expect(map.summary).toMatchObject({ agents: 1, filesEdited: 2, filesCreated: 1 })
+
+    const stored = Object.fromEntries(map.stored.map(s => [s.key, s.files]))
+    expect(stored).toMatchObject({
+      transcript: 1,
+      subagents: 2,
+      'tool-results': 1,
+      'file-history': 1,
+      'session-env': 1,
+      'plan:brave-blue-fox': 1,
+    })
+    expect(map.linked.plans.map(p => p.slug)).toEqual(['brave-blue-fox'])
   })
 })

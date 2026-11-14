@@ -6,6 +6,7 @@ A local, read-only dashboard of your Claude Code setup: everything Claude Code k
 - **Overview**: counts, a year of prompt activity, tokens by model, most-used tools, disk use, sessions running now, and a list of things worth a look (inline credentials, broken hooks, disabled plugins, duplicated skills…).
 - **Projects**: every folder Claude Code has worked in. Each one shows its sessions, memories, CLAUDE.md files, settings, MCP servers, agents, commands, skills, hooks and last-session usage.
 - **Sessions**: every transcript, with title, span, prompts, tokens (each response counted once), cost, subagents, PR links and the plan it wrote. A conversation viewer pages through transcripts of any size (tested on a 195 MB one).
+- **Session map**: one session on a timeline, at `/sessions/<id>/map`. It shows its prompts, every subagent it ran (and which agent launched which), every file they read or changed, file-history versions, and everything it keeps under `~/.claude`. Click an agent or a file to see how it connects; the selection is kept in the URL.
 - **Prompt history**: search over `history.jsonl`.
 - **Plans**: plan-mode plans, linked to the sessions that wrote them.
 - **Memories**: auto-memory files by type and project, with `MEMORY.md` index drift and unresolved `[[links]]`.
@@ -74,6 +75,7 @@ What's in my Claude runs on your machine, reads files, and shows them to you. It
   - `daemon/control.key`
   - `session-env/`
   - `shell-snapshots/`
+  - `file-history/` backups (the session map only counts and sizes them)
   - the `~/.claude.json` backups
   - IDE lock `authToken`s
 - **Never parsed from transcripts:** API request payloads (system prompts) and account/org records.
@@ -85,7 +87,7 @@ What's in my Claude runs on your machine, reads files, and shows them to you. It
 server/            Hono API, run by Bun
   app.ts           routes + localhost guard (exports AppType for the typed client)
   lib/             one reader per part of the setup (projects, skills, plugins, mcp, …)
-  lib/transcript/  transcript parsing: head/tail listing, streaming stats, paged conversation
+  lib/transcript/  transcript parsing: head/tail listing, streaming stats, paged conversation, session timelines
   test/            Vitest: generated fixture home, leak test, unit tests
 src/               React 19 + TanStack Router (file routes) + TanStack Query/Table
   routes/          one file per page

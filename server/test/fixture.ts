@@ -222,6 +222,12 @@ export function createFixture(): Fixture {
     jsonl([
       { type: 'session-owner', accountUuid: `${LEAK}-OWNER` },
       {
+        type: 'file-history-snapshot',
+        messageId: 'u1',
+        isSnapshotUpdate: false,
+        snapshot: { messageId: 'u1', timestamp: t(0), trackedFileBackups: {} },
+      },
+      {
         parentUuid: null,
         ...common,
         type: 'user',
@@ -260,6 +266,28 @@ export function createFixture(): Fixture {
           usage,
         },
       },
+      // The launch of the subagent below (its .meta.json names this call).
+      {
+        parentUuid: 'a2',
+        ...common,
+        type: 'assistant',
+        uuid: 'a2b',
+        timestamp: t(1),
+        requestId: 'req1',
+        message: {
+          id: 'msg_1',
+          model: 'claude-opus-5-5',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_x',
+              name: 'Agent',
+              input: { description: 'Look around', subagent_type: 'Explore', prompt: 'MAP-PRIVATE-AGENT-PROMPT' },
+            },
+          ],
+          usage,
+        },
+      },
       {
         parentUuid: 'a2',
         ...common,
@@ -277,6 +305,37 @@ export function createFixture(): Fixture {
         requestId: 'req2',
         message: { id: 'msg_2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Done.' }], usage },
       },
+      // File tools, for the session map. Their inputs must never reach it.
+      ...[
+        { id: 'toolu_r1', name: 'Read', input: { file_path: path.join(project, 'src', 'app.ts') } },
+        {
+          id: 'toolu_e1',
+          name: 'Edit',
+          input: { file_path: path.join(project, 'src', 'app.ts'), old_string: 'a', new_string: 'MAP-PRIVATE-EDIT' },
+        },
+        {
+          id: 'toolu_w1',
+          name: 'Write',
+          input: { file_path: path.join(project, 'notes.md'), content: 'MAP-PRIVATE-WRITE' },
+        },
+      ].map((block, i) => ({
+        parentUuid: 'a3',
+        ...common,
+        type: 'assistant',
+        uuid: `a3${'bcd'[i]}`,
+        timestamp: t(3),
+        requestId: 'req2',
+        message: { id: 'msg_2', model: 'claude-opus-5-5', content: [{ type: 'tool_use', ...block }], usage },
+      })),
+      // notes.md didn't exist before the Write: a backup of "nothing", tracked by a relative path.
+      {
+        type: 'file-history-delta',
+        messageId: 'a3d',
+        snapshotMessageId: 'u1',
+        trackingPath: 'notes.md',
+        backup: { backupFileName: null, version: 1, backupTime: t(3), realParentDir: project },
+        timestamp: t(3),
+      },
       { parentUuid: 'a3', ...common, type: 'system', subtype: 'turn_duration', durationMs: 60_000, timestamp: t(3) },
       {
         parentUuid: 'a3',
@@ -286,6 +345,25 @@ export function createFixture(): Fixture {
         timestamp: t(5),
         origin: { kind: 'human' },
         message: { role: 'user', content: 'now test it' },
+      },
+      // Every snapshot lists every tracked file again.
+      {
+        type: 'file-history-snapshot',
+        messageId: 'u3',
+        isSnapshotUpdate: false,
+        snapshot: {
+          messageId: 'u3',
+          timestamp: t(5),
+          trackedFileBackups: {
+            'src/app.ts': {
+              backupFileName: '0123456789abcdef@v1',
+              version: 1,
+              backupTime: t(3),
+              realParentDir: path.join(project, 'src'),
+            },
+            'notes.md': { backupFileName: null, version: 1, backupTime: t(3), realParentDir: project },
+          },
+        },
       },
       {
         parentUuid: 'u3',
@@ -351,6 +429,12 @@ export function createFixture(): Fixture {
             { type: 'tool_use', id: 'toolu_s5', name: 'mcp__gone__x', input: {} },
             { type: 'tool_use', id: 'toolu_s6', name: 'Agent', input: { subagent_type: 'helper' } },
             { type: 'tool_use', id: 'toolu_s7', name: 'Agent', input: { subagent_type: 'Explore' } },
+            {
+              type: 'tool_use',
+              id: 'toolu_s8',
+              name: 'Read',
+              input: { file_path: path.join(project, 'src', 'app.ts') },
+            },
           ],
           usage,
         },
@@ -361,6 +445,9 @@ export function createFixture(): Fixture {
     path.join(dir, sessionId, 'subagents', `agent-${agentId}.meta.json`),
     json({ agentType: 'Explore', description: 'Look around', toolUseId: 'toolu_x' }),
   )
+  // Per-session working data: listed by size on the session map, never opened.
+  write(path.join(claude, 'file-history', sessionId, '0123456789abcdef@v1'), `${LEAK}-BACKUP`)
+  write(path.join(dir, sessionId, 'tool-results', 'toolu_9.txt'), `${LEAK}-TOOL-RESULT`)
 
   write(
     path.join(dir, 'memory', 'MEMORY.md'),

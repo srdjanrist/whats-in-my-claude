@@ -79,6 +79,13 @@ export function dateTime(ms: number | string | null | undefined): string {
       })
 }
 
+/** Time of day: 14:05. */
+export function clock(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—'
+  const d = new Date(ms)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
 export function plural(n: number, word: string, many = `${word}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? word : many}`
 }

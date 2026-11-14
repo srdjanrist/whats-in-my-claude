@@ -5,8 +5,9 @@
 import path from 'node:path'
 import { cached, TTL } from './cache.ts'
 import { dirSize, listDir, lstatSafe } from './fs.ts'
-import { claudeDir, claudePath } from './paths.ts'
+import { claudeDir, claudePath, tildify } from './paths.ts'
 import { getInventory, listingOf } from './transcript/indexer.ts'
+import type { TranscriptFile } from './transcript/listing.ts'
 
 export interface StorageEntry {
   name: string
@@ -149,4 +150,66 @@ async function load(): Promise<StorageReport> {
 
 export function readStorage(): Promise<StorageReport> {
   return cached('storage', TTL.storage, load)
+}
+
+/** Something under ~/.claude that belongs to one session. */
+export interface StoredItem {
+  key: string
+  label: string
+  /** Tildified; folders end with a slash. */
+  path: string
+  bytes: number
+  files: number
+  note: string | null
+}
+
+const SESSION_DIR_LABELS: Record<string, string> = {
+  subagents: 'Subagent transcripts',
+  'tool-results': 'Tool results',
+  'session-memory': 'Session memory',
+}
+
+async function storedItem(key: string, label: string, target: string, note: string | null): Promise<StoredItem | null> {
+  const st = await lstatSafe(target)
+  if (!st) return null
+  const isDir = st.isDirectory()
+  const size = st.isSymbolicLink() ? { bytes: 0, files: 0 } : await dirSize(target)
+  return { key, label, path: tildify(target) + (isDir ? '/' : ''), ...size, note }
+}
+
+/**
+ * Everything under ~/.claude that belongs to one session: its transcript, the
+ * folder next to it (subagents, tool results…), its file-history backups,
+ * session-env and debug log, and its plans. Sizes come from lstat alone.
+ * `t` must come from the inventory, so its id is safe to use in a path.
+ */
+export async function sessionStorage(
+  t: TranscriptFile,
+  plans: { slug: string; file: string; bytes: number }[],
+): Promise<StoredItem[]> {
+  const items: StoredItem[] = [
+    { key: 'transcript', label: 'Transcript', path: tildify(t.file), bytes: t.size, files: 1, note: null },
+  ]
+  const dir = path.join(path.dirname(t.file), t.id)
+  for (const entry of await listDir(dir)) {
+    const item = await storedItem(
+      entry.name,
+      SESSION_DIR_LABELS[entry.name] ?? entry.name,
+      path.join(dir, entry.name),
+      null,
+    )
+    if (item) items.push(item)
+  }
+  const extras: [string, string, string, string | null][] = [
+    ['file-history', 'File history', claudePath('file-history', t.id), 'Backups of edited files, used to rewind.'],
+    ['session-env', 'Session env', claudePath('session-env', t.id), 'Sizes only: never opened.'],
+    ['debug', 'Debug log', claudePath('debug', `${t.id}.txt`), null],
+  ]
+  for (const [key, label, target, note] of extras) {
+    const item = await storedItem(key, label, target, note)
+    if (item) items.push(item)
+  }
+  for (const p of plans)
+    items.push({ key: `plan:${p.slug}`, label: 'Plan', path: tildify(p.file), bytes: p.bytes, files: 1, note: null })
+  return items
 }

@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { ExternalLink, GitBranch } from 'lucide-react'
+import { ExternalLink, GitBranch, Waypoints } from 'lucide-react'
 import { BarList, KeyValues, Mono, PageHeader, QueryView, Section, StatCard, Tag } from '@/components/common'
 import { Conversation } from '@/components/conversation'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { type client, q, type Res } from '@/lib/api'
 import { bytes, dateTime, duration, modelLabel, shortCount, totalTokens, usd } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -46,7 +47,20 @@ function SessionBody({ data }: { data: SessionData }) {
             <Mono>{s.id}</Mono>
           </span>
         }
-        actions={st.versions.length ? <Badge variant="outline">Claude Code {st.versions.at(-1)}</Badge> : null}
+        actions={
+          <>
+            {st.versions.length ? <Badge variant="outline">Claude Code {st.versions.at(-1)}</Badge> : null}
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link to="/sessions/$id/map" params={{ id: s.id }} />}
+            >
+              <Waypoints />
+              Open session map
+            </Button>
+          </>
+        }
       />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
         <StatCard label="Prompts" value={st.humanPrompts} />
@@ -171,6 +185,16 @@ function SessionBody({ data }: { data: SessionData }) {
         <Section
           title={`Subagents (${data.subagents.length})`}
           description="Click one to read its own transcript below."
+          actions={
+            <Link
+              to="/sessions/$id/map"
+              params={{ id: s.id }}
+              search={agent ? { agent } : {}}
+              className="shrink-0 text-xs underline"
+            >
+              See how they connect on the map →
+            </Link>
+          }
         >
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             <Link

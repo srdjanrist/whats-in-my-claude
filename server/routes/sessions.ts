@@ -1,17 +1,23 @@
 import { Hono } from 'hono'
-import { tildify } from '../lib/paths.ts'
-import { readPlans } from '../lib/plans.ts'
+import { homeDir, tildify } from '../lib/paths.ts'
+import { type PlanItem, readPlans } from '../lib/plans.ts'
+import { buildSessionMap, type MapAgentInput } from '../lib/session-map.ts'
+import { sessionStorage } from '../lib/storage.ts'
 import { conversationEntry, conversationPage } from '../lib/transcript/conversation.ts'
 import {
   cachedStats,
+  ensureIndexing,
   findSession,
   getInventory,
   getListings,
+  lastStats,
   listingOf,
   statsFor,
   subagentsOf,
 } from '../lib/transcript/indexer.ts'
-import type { TranscriptFile } from '../lib/transcript/listing.ts'
+import type { SessionListing, TranscriptFile } from '../lib/transcript/listing.ts'
+import type { SessionStats } from '../lib/transcript/stats.ts'
+import { timelineOf } from '../lib/transcript/timeline.ts'
 import { int, query, z } from './util.ts'
 
 /** The transcript to read: the session's own, or one of its subagents' (?agent=<id>). */
@@ -20,6 +26,52 @@ function target(sessionId: string, agent: string | undefined): TranscriptFile | 
   if (!session) return null
   if (!agent) return session
   return getInventory().subagents.find(s => s.parentId === sessionId && s.agentId === agent) ?? null
+}
+
+/** A session's plans (by its slug) and the session it was continued in. */
+async function linksOf(stats: SessionStats, listing: SessionListing) {
+  const slug = stats.slug ?? listing.slug
+  const plans: PlanItem[] = slug
+    ? (await readPlans()).filter(p => p.slug === slug || p.slug.startsWith(`${slug}-agent-`))
+    : []
+  const continued = stats.continuedIn ? findSession(stats.continuedIn) : null
+  return {
+    plans,
+    continuedIn: stats.continuedIn
+      ? {
+          id: stats.continuedIn,
+          title: continued ? listingOf(continued).title : null,
+          exists: continued !== null,
+        }
+      : null,
+  }
+}
+
+/** Sessions that were continued in this one; `partial` while some aren't indexed yet. */
+function continuedFrom(id: string) {
+  const from: { id: string; title: string | null }[] = []
+  let partial = false
+  for (const s of getInventory().sessions) {
+    if (s.id === id) continue
+    const stats = cachedStats(s) ?? lastStats(s)
+    if (!stats) partial = true
+    else if (stats.continuedIn === id) from.push({ id: s.id, title: listingOf(s).title })
+  }
+  return { from, partial }
+}
+
+/** Maps with at most `limit` calls in flight (a session can have a hundred subagents). */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i] as T)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
 }
 
 export const sessionsRoute = new Hono()
@@ -79,9 +131,7 @@ export const sessionsRoute = new Hono()
         lastAt: st?.lastAt ?? null,
       }
     })
-    const slug = stats.slug ?? listing.slug
-    const plans = slug ? (await readPlans()).filter(p => p.slug === slug || p.slug.startsWith(`${slug}-agent-`)) : []
-    const continued = stats.continuedIn ? findSession(stats.continuedIn) : null
+    const links = await linksOf(stats, listing)
     return c.json({
       session: {
         ...listing,
@@ -90,14 +140,54 @@ export const sessionsRoute = new Hono()
       },
       stats,
       subagents,
-      plans: plans.map(p => ({ slug: p.slug, title: p.title })),
-      continuedIn: stats.continuedIn
-        ? {
-            id: stats.continuedIn,
-            title: continued ? listingOf(continued).title : null,
-            exists: continued !== null,
-          }
-        : null,
+      plans: links.plans.map(p => ({ slug: p.slug, title: p.title })),
+      continuedIn: links.continuedIn,
+    })
+  })
+  .get('/:id/map', async c => {
+    const t = findSession(c.req.param('id'))
+    if (!t) return c.json({ error: 'not-found' as const }, 404)
+    ensureIndexing()
+    const listing = listingOf(t)
+    const [stats, timeline, agents] = await Promise.all([
+      statsFor(t),
+      timelineOf(t),
+      mapLimit(subagentsOf(t.id), 8, async (s): Promise<MapAgentInput> => {
+        const [agentStats, agentTimeline] = await Promise.all([statsFor(s), timelineOf(s)])
+        return {
+          agentId: s.agentId,
+          meta: s.meta,
+          timeline: agentTimeline,
+          stats: agentStats,
+          bytes: s.size,
+          mtimeMs: s.mtimeMs,
+        }
+      }),
+    ])
+    const links = await linksOf(stats, listing)
+    const from = continuedFrom(t.id)
+    const stored = await sessionStorage(t, links.plans)
+    return c.json({
+      session: {
+        id: t.id,
+        title: listing.title,
+        projectDir: t.projectDir,
+        displayCwd: listing.cwd ? tildify(listing.cwd) : null,
+      },
+      ...buildSessionMap({
+        cwd: listing.cwd,
+        home: homeDir(),
+        now: Date.now(),
+        main: { timeline, stats },
+        agents,
+        stored,
+        linked: {
+          continuedIn: links.continuedIn,
+          continuedFrom: from.from,
+          continuedFromPartial: from.partial,
+          plans: links.plans.map(p => ({ slug: p.slug, title: p.title, agentId: p.agentId })),
+        },
+      }),
     })
   })
   .get(
