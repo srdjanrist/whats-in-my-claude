@@ -28,7 +28,8 @@ export function Conversation({ sessionId, agent }: { sessionId: string; agent?: 
   if (query.error) return <ErrorState error={query.error} />
   if (query.isPending) {
     return (
-      <div className="flex items-center gap-2 p-6 text-xs text-muted-foreground">
+      // Viewport-tall so swapping transcripts can't shrink the page and pull the scroll position up.
+      <div className="flex min-h-svh items-start gap-2 p-6 text-xs text-muted-foreground">
         <Loader2 className="size-4 animate-spin" /> Indexing the transcript…
       </div>
     )

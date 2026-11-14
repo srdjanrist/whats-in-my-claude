@@ -177,6 +177,7 @@ function SessionBody({ data }: { data: SessionData }) {
               to="/sessions/$id"
               params={{ id: s.id }}
               search={{}}
+              resetScroll={false}
               className={cn('border p-2 text-xs hover:bg-muted/50', !agent && 'border-primary bg-primary/5')}
             >
               <div className="font-medium">Main conversation</div>
@@ -188,6 +189,7 @@ function SessionBody({ data }: { data: SessionData }) {
                 to="/sessions/$id"
                 params={{ id: s.id }}
                 search={{ agent: a.agentId }}
+                resetScroll={false}
                 className={cn(
                   'border p-2 text-xs hover:bg-muted/50',
                   agent === a.agentId && 'border-primary bg-primary/5',
