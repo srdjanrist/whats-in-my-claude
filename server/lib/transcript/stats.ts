@@ -7,10 +7,11 @@
 // line per content block), so it is counted once per message id.
 import { createReadStream } from 'node:fs'
 import readline from 'node:readline'
-import { isHumanPrompt } from './prompts.ts'
-import { type CostTotals, isSkippedLine, parseRecord, type Usage } from './records.ts'
+import { isObj, str } from '../fs.ts'
+import { commandName, isHumanPrompt } from './prompts.ts'
+import { type CostTotals, isSkippedLine, parseRecord, textOf, type Usage } from './records.ts'
 
-export const STATS_VERSION = 2
+export const STATS_VERSION = 3
 
 export interface ModelTokens extends Usage {
   messages: number
@@ -25,6 +26,12 @@ export interface SessionStats {
   userMessages: number
   assistantMessages: number
   toolCalls: Record<string, number>
+  /** Skill tool calls by skill (as Claude names it: plugin:skill or the bare name). */
+  skillCalls: Record<string, number>
+  /** Agent / Task tool calls by subagent_type. */
+  agentCalls: Record<string, number>
+  /** Slash commands run (`/name`), including skills started with a slash. */
+  commandCalls: Record<string, number>
   models: Record<string, ModelTokens>
   tokens: Usage
   firstAt: number | null
@@ -52,6 +59,9 @@ export function emptyStats(): SessionStats {
     userMessages: 0,
     assistantMessages: 0,
     toolCalls: {},
+    skillCalls: {},
+    agentCalls: {},
+    commandCalls: {},
     models: {},
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     firstAt: null,
@@ -67,6 +77,10 @@ export function emptyStats(): SessionStats {
     versions: [],
     permissionModes: [],
   }
+}
+
+function bump(counts: Record<string, number>, key: string, by = 1): void {
+  counts[key] = (counts[key] ?? 0) + by
 }
 
 export async function computeStats(file: string): Promise<SessionStats> {
@@ -109,6 +123,10 @@ export async function computeStats(file: string): Promise<SessionStats> {
       case 'user':
         s.userMessages++
         if (isHumanPrompt(r)) s.humanPrompts++
+        if (!r.isMeta && !r.hasToolResult) {
+          const command = commandName(textOf(r.content))
+          if (command) bump(s.commandCalls, command)
+        }
         break
       case 'assistant': {
         if (r.isApiError) {
@@ -118,7 +136,15 @@ export async function computeStats(file: string): Promise<SessionStats> {
         }
         for (const block of r.content) {
           if (block.type === 'tool_use' && typeof block.name === 'string') {
-            s.toolCalls[block.name] = (s.toolCalls[block.name] ?? 0) + 1
+            bump(s.toolCalls, block.name)
+            const input = isObj(block.input) ? block.input : {}
+            if (block.name === 'Skill') {
+              const skill = str(input.skill)
+              if (skill) bump(s.skillCalls, skill.replace(/^\//, ''))
+            } else if (block.name === 'Agent' || block.name === 'Task') {
+              const agent = str(input.subagent_type)
+              if (agent) bump(s.agentCalls, agent)
+            }
           }
         }
         const id = r.messageId ?? r.requestId ?? r.uuid
@@ -175,7 +201,8 @@ export function addStats(a: SessionStats, b: SessionStats): SessionStats {
   a.workMs += b.workMs
   a.compactions += b.compactions
   a.apiErrors += b.apiErrors
-  for (const [tool, count] of Object.entries(b.toolCalls)) a.toolCalls[tool] = (a.toolCalls[tool] ?? 0) + count
+  for (const k of ['toolCalls', 'skillCalls', 'agentCalls', 'commandCalls'] as const)
+    for (const [key, count] of Object.entries(b[k])) bump(a[k], key, count)
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) a.tokens[k] += b.tokens[k]
   for (const [model, m] of Object.entries(b.models)) {
     const t = a.models[model] ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 }

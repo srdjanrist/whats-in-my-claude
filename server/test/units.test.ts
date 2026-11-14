@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isLocalHost, isLocalOrigin } from '../app.ts'
+import { mcpToolPrefix } from '../lib/graph.ts'
 import { findImports } from '../lib/instructions.ts'
 import { encodeProjectDir } from '../lib/paths.ts'
 import {
@@ -11,7 +12,7 @@ import {
   redactSettings,
   redactUrl,
 } from '../lib/redact.ts'
-import { isHumanPrompt } from '../lib/transcript/prompts.ts'
+import { commandName, isHumanPrompt } from '../lib/transcript/prompts.ts'
 import { parseRecord, type UserRecord } from '../lib/transcript/records.ts'
 import { hookScripts } from '../lib/warnings.ts'
 
@@ -119,5 +120,19 @@ describe('localhost guard', () => {
     expect(isLocalOrigin(undefined)).toBe(true)
     expect(isLocalOrigin('http://127.0.0.1:5173')).toBe(true)
     expect(isLocalOrigin('https://attacker.example')).toBe(false)
+  })
+})
+
+describe('project map', () => {
+  it('names MCP tools the way Claude Code does', () => {
+    expect(mcpToolPrefix('claude.ai Gmail')).toBe('mcp__claude_ai_Gmail__')
+    expect(mcpToolPrefix('claude-in-chrome')).toBe('mcp__claude-in-chrome__')
+    expect(mcpToolPrefix('vercel', 'vercel')).toBe('mcp__plugin_vercel_vercel__')
+  })
+
+  it('reads the slash command a message ran', () => {
+    expect(commandName('<command-name>/review</command-name>\n<command-args>12</command-args>')).toBe('/review')
+    expect(commandName('<command-name>ns:do</command-name>')).toBe('/ns:do')
+    expect(commandName('just text')).toBeNull()
   })
 })

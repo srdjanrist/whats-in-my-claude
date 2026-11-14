@@ -30,6 +30,10 @@ export function createFileCache<T>(limit = Number.POSITIVE_INFINITY) {
       const hit = entries.get(file)
       return hit && hit.size === size && hit.mtimeMs === mtimeMs ? hit.value : undefined
     },
+    /** The last value stored for a file, even if the file has changed since. */
+    latest(file: string): T | undefined {
+      return entries.get(file)?.value
+    },
     set(file: string, size: number, mtimeMs: number, value: T): void {
       entries.delete(file)
       entries.set(file, { size, mtimeMs, value })

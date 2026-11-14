@@ -16,6 +16,7 @@ import {
 import { columnHelper, DataTable } from '@/components/data-table'
 import { DetailSheet } from '@/components/detail-sheet'
 import { JsonView } from '@/components/markdown'
+import { ProjectMap } from '@/components/project-map'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InstructionViewer, MemoryViewer } from '@/components/viewers'
 import { type client, q, type Res } from '@/lib/api'
@@ -104,6 +105,7 @@ function ProjectBody({ data }: { data: ProjectData }) {
           <TabsTrigger value="memory">Memory ({data.memory.items.length})</TabsTrigger>
           <TabsTrigger value="instructions">Instructions ({cfg.instructions.length})</TabsTrigger>
           <TabsTrigger value="config">Config ({configCount})</TabsTrigger>
+          <TabsTrigger value="map">Map</TabsTrigger>
           <TabsTrigger value="usage">Last session usage</TabsTrigger>
         </TabsList>
         <TabsContent value="sessions" className="pt-2">
@@ -171,6 +173,9 @@ function ProjectBody({ data }: { data: ProjectData }) {
         </TabsContent>
         <TabsContent value="config" className="space-y-4 pt-2">
           <ProjectConfig data={data} />
+        </TabsContent>
+        <TabsContent value="map" className="pt-2">
+          <ProjectMap id={p.id} />
         </TabsContent>
         <TabsContent value="usage" className="pt-2">
           {data.state ? (

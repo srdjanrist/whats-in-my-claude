@@ -19,6 +19,13 @@ export function isHumanPrompt(r: UserRecord): boolean {
   return text !== '' && !/^(<system-reminder>|<task-notification>|\[Request interrupted|<local-command)/.test(text)
 }
 
+/** The slash command a message ran (`/name`), from its `<command-name>` tag. */
+export function commandName(text: string): string | null {
+  const name = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1]?.trim()
+  if (!name) return null
+  return name.startsWith('/') ? name : `/${name}`
+}
+
 /** A prompt as one line: slash commands as `/name args`, without injected reminders. */
 export function promptText(content: string | Block[], max = PROMPT_MAX): string {
   const parts =

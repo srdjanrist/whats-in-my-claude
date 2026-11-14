@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { readDefinitions } from '../lib/agents.ts'
 import { readClaudeJson } from '../lib/claude-json.ts'
+import { buildProjectMap } from '../lib/graph.ts'
 import { readHooks } from '../lib/hooks.ts'
 import { readInstructions } from '../lib/instructions.ts'
 import { readMcpServers } from '../lib/mcp.ts'
@@ -11,10 +12,72 @@ import { findProject, readProjects } from '../lib/projects.ts'
 import { redactSettings } from '../lib/redact.ts'
 import { setupContext } from '../lib/setup.ts'
 import { readSkills } from '../lib/skills.ts'
-import { cachedStats, getInventory, getListings } from '../lib/transcript/indexer.ts'
+import {
+  cachedStats,
+  ensureIndexing,
+  getInventory,
+  getListings,
+  indexStatus,
+  lastStats,
+} from '../lib/transcript/indexer.ts'
+import { addStats, emptyStats, type SessionStats } from '../lib/transcript/stats.ts'
 
 export const projectsRoute = new Hono()
   .get('/', async c => c.json({ projects: await readProjects() }))
+  .get('/:id/graph', async c => {
+    const project = await findProject(c.req.param('id'))
+    if (!project) return c.json({ error: 'not-found' as const }, 404)
+    ensureIndexing()
+    const { roots, plugins } = await setupContext()
+    const [mcp, defs, skills, hooks, claudeJson] = await Promise.all([
+      readMcpServers(plugins, roots),
+      readDefinitions(plugins, roots),
+      readSkills(plugins, roots),
+      readHooks(plugins, roots),
+      readClaudeJson(),
+    ])
+    // One stats entry per session, with its subagents' transcripts added in.
+    const transcripts = [
+      ...getListings().filter(l => l.projectDir === project.id),
+      ...getInventory().subagents.filter(s => s.projectDir === project.id),
+    ]
+    const bySession = new Map<string, SessionStats>()
+    let indexed = 0
+    let behind = 0
+    for (const t of transcripts) {
+      const current = cachedStats(t)
+      // A transcript that grew since it was indexed (a running session) still counts, a little behind.
+      const stats = current ?? lastStats(t)
+      if (!stats) continue
+      if (current) indexed++
+      else behind++
+      const key = 'parentId' in t && t.parentId ? t.parentId : t.id
+      bySession.set(key, addStats(bySession.get(key) ?? emptyStats(), stats))
+    }
+    const map = project.path
+      ? buildProjectMap({
+          path: project.path,
+          plugins,
+          mcp,
+          skills,
+          agents: defs.agents,
+          commands: defs.commands,
+          hooks,
+          state: claudeJson.projects[project.path],
+          sessions: [...bySession.values()],
+        })
+      : { origins: [], items: [] }
+    return c.json({
+      project: { id: project.id, name: project.name, displayPath: project.path ? tildify(project.path) : project.id },
+      ...map,
+      coverage: {
+        transcripts: transcripts.length,
+        indexed,
+        behind,
+        indexing: indexed < transcripts.length && indexStatus().state === 'running',
+      },
+    })
+  })
   .get('/:id', async c => {
     const project = await findProject(c.req.param('id'))
     if (!project) return c.json({ error: 'not-found' as const }, 404)

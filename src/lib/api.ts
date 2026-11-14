@@ -46,6 +46,13 @@ export const q = {
       queryKey: ['project', id],
       queryFn: () => ok(api.projects[':id'].$get({ param: { id } })),
     }),
+  projectGraph: (id: string) =>
+    queryOptions({
+      queryKey: ['project-graph', id],
+      queryFn: () => ok(api.projects[':id'].graph.$get({ param: { id } })),
+      // Usage fills in while the background index runs.
+      refetchInterval: query => (query.state.data?.coverage.indexing ? 3000 : false),
+    }),
   sessions: () =>
     queryOptions({
       queryKey: ['sessions'],

@@ -8,7 +8,7 @@ import { readMemories } from '../lib/memories.ts'
 import { readProjects } from '../lib/projects.ts'
 import { setupContext } from '../lib/setup.ts'
 import { readSkills } from '../lib/skills.ts'
-import { getListings, scanTranscripts } from '../lib/transcript/indexer.ts'
+import { getListings, scanTranscripts, statsFor } from '../lib/transcript/indexer.ts'
 import { computeStats } from '../lib/transcript/stats.ts'
 import { readWarnings } from '../lib/warnings.ts'
 import { createFixture, type Fixture, LEAK } from './fixture.ts'
@@ -139,6 +139,7 @@ describe('api', () => {
       '/api/overview',
       '/api/projects',
       ...projects.projects.map(p => `/api/projects/${encodeURIComponent(p.id)}`),
+      ...projects.projects.map(p => `/api/projects/${encodeURIComponent(p.id)}/graph`),
       '/api/sessions',
       `/api/sessions/${sessionId}`,
       `/api/sessions/${sessionId}/conversation?offset=0&limit=200`,
@@ -177,6 +178,60 @@ describe('api', () => {
     const mcp = await (await get('/api/mcp')).text()
     expect(mcp).toContain('OPENROUTER_API_KEY')
     expect(mcp).toContain('API_TOKEN')
+  })
+
+  it('maps what a project has configured against what its sessions used', async () => {
+    const inv = scanTranscripts()
+    for (const t of [...inv.sessions, ...inv.subagents]) await statsFor(t)
+    const sub = await computeStats(inv.subagents[0]?.file ?? '')
+    expect(sub.skillCalls).toEqual({ 'my-skill': 1 })
+    expect(sub.agentCalls).toEqual({ helper: 1, Explore: 1 })
+    expect(sub.commandCalls).toEqual({ '/ns:do': 1 })
+    const res = await get(`/api/projects/${encodeURIComponent(fx.projectDir)}/graph`)
+    expect(res.status).toBe(200)
+    const map = (await res.json()) as {
+      origins: { id: string; kind: string }[]
+      items: {
+        kind: string
+        label: string
+        origin: string
+        enabled: boolean | null
+        uses: number | null
+        sessions: number
+      }[]
+      coverage: { transcripts: number; indexed: number }
+    }
+    const item = (kind: string, label: string) => map.items.find(i => i.kind === kind && i.label === label)
+    expect(map.coverage).toMatchObject({ transcripts: 2, indexed: 2 })
+    expect(map.origins.map(o => o.id)).toEqual([
+      'user',
+      'project',
+      'local',
+      'claude-ai',
+      'plugin:demo@mkt',
+      'builtin',
+      'missing',
+    ])
+    // Subagent calls count toward their session: one session used each.
+    expect(item('skill', 'my-skill')).toMatchObject({ origin: 'user', uses: 1, sessions: 1 })
+    expect(item('mcp', 'search')).toMatchObject({ origin: 'user', uses: 2 })
+    expect(item('mcp', 'demo')).toMatchObject({ origin: 'plugin:demo@mkt', uses: 1 })
+    expect(item('agent', 'helper')).toMatchObject({ origin: 'user', uses: 1 })
+    expect(item('command', '/ns:do')).toMatchObject({ origin: 'user', uses: 1 })
+    // Configured, never used.
+    expect(item('skill', 'demo-skill')).toMatchObject({ origin: 'plugin:demo@mkt', uses: 0, sessions: 0 })
+    expect(item('mcp', 'zen')).toMatchObject({ origin: 'project', uses: 0, enabled: null })
+    expect(item('mcp', 'remote')).toMatchObject({ origin: 'local', uses: 0 })
+    expect(item('mcp', 'Gmail')).toMatchObject({ origin: 'claude-ai', uses: 0 })
+    // Used, not in the setup.
+    expect(item('mcp', 'gone')).toMatchObject({ origin: 'missing', uses: 1 })
+    expect(item('agent', 'Explore')).toMatchObject({ origin: 'builtin', uses: 1 })
+    // ~/.agents/skills only counts through its link in ~/.claude/skills.
+    expect(map.items.filter(i => i.label === 'shared').map(i => i.origin)).toEqual(['user'])
+    // Hooks can't be counted, and only their event and matcher are shown.
+    const hooks = map.items.filter(i => i.kind === 'hook')
+    expect(hooks.map(h => h.label).sort()).toEqual(['PreToolUse · Bash', 'SessionStart', 'Stop'])
+    expect(hooks.every(h => h.uses === null)).toBe(true)
   })
 
   it('serves the conversation with responses grouped by message id', async () => {

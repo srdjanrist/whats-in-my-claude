@@ -327,7 +327,8 @@ export function createFixture(): Fixture {
         type: 'user',
         uuid: 's1',
         timestamp: t(2),
-        message: { role: 'user', content: 'explore' },
+        // A slash command, so the project map sees /ns:do used.
+        message: { role: 'user', content: '<command-name>/ns:do</command-name>\nexplore' },
       },
       {
         parentUuid: 's1',
@@ -337,7 +338,22 @@ export function createFixture(): Fixture {
         type: 'assistant',
         uuid: 's2',
         timestamp: t(2),
-        message: { id: 'msg_s1', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'Found it.' }], usage },
+        message: {
+          id: 'msg_s1',
+          model: 'claude-haiku-5-5',
+          content: [
+            { type: 'text', text: 'Found it.' },
+            // Calls the project map matches against the setup.
+            { type: 'tool_use', id: 'toolu_s1', name: 'Skill', input: { skill: 'my-skill' } },
+            { type: 'tool_use', id: 'toolu_s2', name: 'mcp__search__query', input: {} },
+            { type: 'tool_use', id: 'toolu_s3', name: 'mcp__search__query', input: {} },
+            { type: 'tool_use', id: 'toolu_s4', name: 'mcp__plugin_demo_demo__ping', input: {} },
+            { type: 'tool_use', id: 'toolu_s5', name: 'mcp__gone__x', input: {} },
+            { type: 'tool_use', id: 'toolu_s6', name: 'Agent', input: { subagent_type: 'helper' } },
+            { type: 'tool_use', id: 'toolu_s7', name: 'Agent', input: { subagent_type: 'Explore' } },
+          ],
+          usage,
+        },
       },
     ]),
   )

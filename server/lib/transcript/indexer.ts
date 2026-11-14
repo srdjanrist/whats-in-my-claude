@@ -198,6 +198,15 @@ export function cachedStats(t: TranscriptFile): SessionStats | null {
   return statsCache.get(t.file, t.size, t.mtimeMs) ?? null
 }
 
+/**
+ * Stats from the last time a transcript was indexed, even if it has grown since
+ * (a running session's transcript changes every few seconds), or null.
+ */
+export function lastStats(t: TranscriptFile): SessionStats | null {
+  loadPersisted()
+  return statsCache.latest(t.file) ?? null
+}
+
 export interface IndexStatus {
   state: 'idle' | 'running' | 'done'
   files: number
