@@ -32,21 +32,32 @@ function focusOf(data: MapData, selection: Selection): Focus | null {
     const f = data.files.find(x => x.id === selection.file)
     if (!f) return null
     const whos = new Set(f.events.map(e => e.who))
-    return { agents: new Set([...whos].filter(w => w !== 'main')), main: whos.has('main') }
+    return {
+      agents: new Set([...whos].filter(w => w !== 'main')),
+      whos: null,
+      files: new Set([f.id]),
+      main: whos.has('main'),
+    }
   }
-  if (selection.agent === 'main') return { agents: new Set(), main: true }
+  const touchedBy = (whos: Set<string>) =>
+    new Set(data.files.filter(f => f.events.some(e => whos.has(e.who))).map(f => f.id))
+  if (selection.agent === 'main') {
+    const whos = new Set(['main'])
+    return { agents: new Set(), whos, files: touchedBy(whos), main: true }
+  }
   const byId = new Map(data.agents.map(a => [a.id, a]))
   const agent = byId.get(selection.agent)
   if (!agent) return null
-  // The agent, everything it launched, and its ancestors for context.
-  const agents = new Set([agent.id])
+  // The agent and everything it launched did the work; its ancestors stay lit for context.
+  const whos = new Set([agent.id])
   const stack = [...agent.children]
   for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
-    agents.add(id)
+    whos.add(id)
     stack.push(...(byId.get(id)?.children ?? []))
   }
+  const agents = new Set(whos)
   for (let p = byId.get(agent.parent); p && !agents.has(p.id); p = byId.get(p.parent)) agents.add(p.id)
-  return { agents, main: true }
+  return { agents, whos, files: touchedBy(whos), main: true }
 }
 
 /** Valid selection only: unknown ids count as nothing selected. */
@@ -431,6 +442,14 @@ function Legend({ data }: { data: MapData }) {
         ))}
       </ul>
       <ul className="space-y-1">
+        <li className="flex items-center gap-2">
+          <span className="size-2.5 rounded-full border-2 border-foreground bg-background" />
+          read (under Files)
+        </li>
+        <li className="flex items-center gap-2">
+          <span className="size-2.5 rounded-full border-2 border-foreground bg-foreground" />
+          edited or written
+        </li>
         <li className="flex items-center gap-2">
           <span className="flex size-4 items-center justify-center rounded-full bg-foreground text-[9px] font-semibold text-background">
             1

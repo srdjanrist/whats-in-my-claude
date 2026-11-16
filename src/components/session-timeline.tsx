@@ -1,7 +1,10 @@
-// The session map's timeline: the main session and every subagent on one time
-// axis. Each row is a button that selects it; positions are percentages from a
-// scale that collapses long idle gaps into hatched breaks.
-import type { ReactNode } from 'react'
+// The session map's timeline: the main session, every subagent and (folded
+// away by default) every file on one time axis. Each row is a button that
+// selects it; positions are percentages from a scale that collapses long idle
+// gaps into hatched breaks.
+import { ChevronRight } from 'lucide-react'
+import { type ReactNode, useId, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import type { client, Res } from '@/lib/api'
 import { clock, date, duration } from '@/lib/format'
 import type { Scale } from '@/lib/timeline-scale'
@@ -17,17 +20,20 @@ export type Selection = { agent: string } | { file: string } | null
 export interface Focus {
   /** Agent rows that stay lit. */
   agents: Set<string>
+  /** Whose file dots stay lit ('main' or agent ids); null = every dot in a lit file. */
+  whos: Set<string> | null
+  files: Set<string>
   main: boolean
 }
 
 // Literal class names, so Tailwind sees them.
 const TYPE_CLASS = {
-  main: { bg: 'bg-foreground' },
-  Explore: { bg: 'bg-chart-3' },
-  Plan: { bg: 'bg-chart-5' },
-  'general-purpose': { bg: 'bg-chart-2' },
-  fork: { bg: 'bg-chart-1' },
-  other: { bg: 'bg-chart-4' },
+  main: { bg: 'bg-foreground', border: 'border-foreground' },
+  Explore: { bg: 'bg-chart-3', border: 'border-chart-3' },
+  Plan: { bg: 'bg-chart-5', border: 'border-chart-5' },
+  'general-purpose': { bg: 'bg-chart-2', border: 'border-chart-2' },
+  fork: { bg: 'bg-chart-1', border: 'border-chart-1' },
+  other: { bg: 'bg-chart-4', border: 'border-chart-4' },
 } as const
 
 export type TypeKey = keyof typeof TYPE_CLASS
@@ -73,6 +79,7 @@ export function whoClass(data: MapData, who: string) {
 }
 
 const ROW = 'grid w-full grid-cols-[14rem_minmax(0,1fr)_3.5rem] items-center text-left text-xs'
+const FILE_LIMIT = 50
 
 export function SessionTimeline({
   data,
@@ -87,6 +94,12 @@ export function SessionTimeline({
   selection: Selection
   onSelect: (s: Selection) => void
 }) {
+  // Files start folded away, unless the page opened on a selected file.
+  const [filesOpen, setFilesOpen] = useState(() => selection !== null && 'file' in selection)
+  const [allFiles, setAllFiles] = useState(
+    () => selection !== null && 'file' in selection && data.files.findIndex(f => f.id === selection.file) >= FILE_LIMIT,
+  )
+  const filesId = useId()
   const { main } = data
   const x = scale.x
   /** left / width for a bar from `from` to `to`, at least `min` % wide. */
@@ -95,7 +108,9 @@ export function SessionTimeline({
     return { left: `${Math.min(x(from), 100 - width)}%`, width: `${width}%` }
   }
   const selectedAgent = selection && 'agent' in selection ? selection.agent : null
+  const selectedFile = selection && 'file' in selection ? selection.file : null
   const toggle = (agent: string) => onSelect(agent === selectedAgent ? null : { agent })
+  const toggleFile = (file: string) => onSelect(file === selectedFile ? null : { file })
 
   // Prompt numbers only where there's room; crowded ones are drawn as dots.
   let lastPromptX = Number.NEGATIVE_INFINITY
@@ -106,6 +121,7 @@ export function SessionTimeline({
     if (labelled) lastPromptX = px
     return [{ ...p, px, labelled }]
   })
+  const files = allFiles ? data.files : data.files.slice(0, FILE_LIMIT)
 
   return (
     <div className="min-w-0 border">
@@ -278,6 +294,92 @@ export function SessionTimeline({
               </button>
             )
           })}
+
+          <button
+            type="button"
+            aria-expanded={filesOpen}
+            aria-controls={filesId}
+            onClick={() => setFilesOpen(!filesOpen)}
+            className="relative flex w-full items-center gap-1.5 border-t bg-muted/40 px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted/70"
+          >
+            <ChevronRight className={cn('size-3 transition-transform', filesOpen && 'rotate-90')} />
+            Files · {data.files.length}
+            {filesOpen ? null : (
+              <span className="font-normal normal-case tracking-normal">
+                {' '}
+                (read or changed with Claude Code’s file tools; click to show)
+              </span>
+            )}
+          </button>
+          {filesOpen ? (
+            <div id={filesId}>
+              {data.files.length === 0 ? (
+                <p className="relative px-3 py-2 text-[11px] text-muted-foreground">No file was read or changed.</p>
+              ) : null}
+              {files.map(f => {
+                const selected = selectedFile === f.id
+                const lit = !focus || focus.files.has(f.id)
+                const lastVersion = f.versions.at(-1)?.version
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggleFile(f.id)}
+                    className={cn(ROW, 'relative min-h-9 border-t hover:bg-muted/40', selected && 'bg-muted/60')}
+                  >
+                    <span
+                      className={cn('flex min-w-0 items-center gap-1.5 overflow-hidden px-3', !lit && 'opacity-35')}
+                      title={f.id}
+                    >
+                      <span className="flex min-w-0">
+                        <span className="min-w-0 shrink-[999] truncate text-muted-foreground">{f.dir}</span>
+                        <span className="max-w-full shrink-0 truncate">{f.name}</span>
+                      </span>
+                      {f.created ? (
+                        <span className="shrink-0 bg-emerald-500/10 px-1 text-[10px] text-emerald-700 dark:text-emerald-300">
+                          new
+                        </span>
+                      ) : null}
+                    </span>
+                    {/* A dimmed row fades as a whole, so overlapping dots don't stack their opacity. */}
+                    <span className={cn('relative block h-9', !lit && 'opacity-15')}>
+                      {f.events.map((e, i) => {
+                        if (e.at === null) return null
+                        const on = !lit || !focus?.whos || focus.whos.has(e.who)
+                        const c = whoClass(data, e.who)
+                        return (
+                          <span
+                            key={i}
+                            title={`${clock(e.at)} · ${e.failed ? 'failed ' : ''}${e.tool} by ${whoName(data, e.who)}`}
+                            className={cn(
+                              'absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2',
+                              c.border,
+                              e.kind === 'read' ? 'bg-background' : c.bg,
+                              focus && lit && on ? 'size-3' : 'size-2.5',
+                              e.failed && 'opacity-40',
+                              !on && 'opacity-15',
+                            )}
+                            style={{ left: `${x(e.at)}%` }}
+                          />
+                        )
+                      })}
+                    </span>
+                    <span className={cn('pr-3 text-right text-[11px] text-muted-foreground', !lit && 'opacity-35')}>
+                      {lastVersion ? `v${lastVersion}` : f.edits ? 'edited' : 'read'}
+                    </span>
+                  </button>
+                )
+              })}
+              {data.files.length > FILE_LIMIT ? (
+                <div className="relative border-t px-3 py-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => setAllFiles(!allFiles)}>
+                    {allFiles ? `Show the first ${FILE_LIMIT}` : `Show all ${data.files.length} files`}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
