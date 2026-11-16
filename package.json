@@ -1,6 +1,6 @@
 {
   "name": "whats-in-my-claude",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local, read-only dashboard of your Claude Code setup: projects, sessions, memories, skills, plugins, MCP servers, hooks and more.",
   "keywords": [
     "claude",
